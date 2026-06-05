@@ -15,23 +15,25 @@
 //   Hashing works well, and fast
 
 // TODO Generation of hashes and comparation should be
-	// in separate functions NOT in browser_cache_scan...
+// in separate functions NOT in browser_cache_scan...
 // TODO Make "0000000000000000" hash be a None.
 // TODO Turn the hash comparsing function upside down:
-	// iterate over every entry in video_data.txt against every cache entry,
-	// not the other way around.
+// iterate over every entry in video_data.txt against every cache entry,
+// not the other way around.
 // TODO Do something about the ffmpeg bottlneck maybe...
 
 mod phash_ai_slop;
 
 use dirs::home_dir;
 use ffmpeg_sidecar::command::FfmpegCommand;
+use ini::Ini;
 use rusqlite::{params, Connection};
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::{env, fs};
-use ini::Ini;
+
+use std::collections::HashMap;
 
 //Constants and statics, mainly paths. LazyLock is a saviour <3
 //MOVE ALL THOSE TO MATCH FUNCTIONS
@@ -54,16 +56,8 @@ static DATA_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     path
 });
 
-//NO BROWSER PROFILES AS LAZYLOCK, I CHANGED MY MIND IT'S A MESS
-
-static LIBREWOLF_CACHE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    home_dir()
-        .expect("Cannot read $HOME")
-        .join(".cache")
-        .join("librewolf")
-});
-
-
+///This struct is meant consume contents of files in "data" directory
+///See VideoData for special treatment of video_data.txt
 struct DataSet {
     video_data: Vec<VideoData>,
     watch_page_data: Vec<String>,
@@ -71,15 +65,29 @@ struct DataSet {
     history_data: Vec<String>,
 }
 
-//Struct for parsing video_data.txt
-//"Roblox+Video+101|-8128339497863628282,39c9cb3870db6751|0000000000000000|00:03:52.43|00:03:52.63"
-//VIDEO TITLE|GOOGLE_VIDEO_ID,GOOGLE_VIDEO_CONTENT_ID|HASH|DUR_MIN|DUR_MAX
+///This struct is meant to consume contents of video_data.txt.
+///Every line is split by "|" separator and every part is put to the corresponding key
+///
+///Example:
+///
+///"Roblox+Video+101|-8128339497863628282,39c9cb3870db6751|0000000000000000|00:03:52.43|00:03:52.63"
+///
+///VIDEO TITLE|GOOGLE_VIDEO_ID,GOOGLE_VIDEO_CONTENT_ID|HASH|DUR_MIN|DUR_MAX
+
 struct VideoData {
     //IN video_data.txt THIS IS A REGEX SPERATED BY + (i think)
+    ///Title of a video.
+    ///It's meant to consume a string with + signs instead of spaces. Perhaps a regex attempt.
     title: String,
+    ///Ids of a video.
+    ///It's meant to consume vector of strings out of a string splited by ",".
     ids: Vec<String>,
+    ///Hash of a video.
+    ///It's meant to consume a u64 converted from a string.
     hash: Vec<u64>,
+    ///Minimal duration of a searched video.
     duration_min: String,
+    ///Maximal duration of a searched video.
     duration_max: String,
 }
 
@@ -91,6 +99,7 @@ fn read_lines(path: impl AsRef<Path>) -> Vec<String> {
         .collect()
 }
 
+///Loads all files from "data" directory into fields of DataSet.
 fn load_dataset() -> DataSet {
     //Loading dataset
     //Read lines of video_data.txt
@@ -120,9 +129,9 @@ fn load_dataset() -> DataSet {
                 .map(|p| p.to_string())
                 .collect(),
             hash: entry_vec[2]
-				.split(",")
-				.filter_map(|h| u64::from_str_radix(h, 16).ok())
-				.collect(),
+                .split(",")
+                .filter_map(|h| u64::from_str_radix(h, 16).ok())
+                .collect(),
             duration_min: entry_vec[3].to_string(),
             duration_max: entry_vec[4].to_string(),
         };
@@ -165,119 +174,136 @@ fn load_dataset() -> DataSet {
 }
 
 fn get_browser_config_profile_root(browser_name: &str) -> Option<PathBuf> {
-	match browser_name {
-		"firefox" => Some(home_dir().expect("Cannot read $HOME").join(".mozilla/firefox")),
-		"librewolf" => Some(home_dir().expect("Cannot read $HOME").join(".config/librewolf/librewolf")),
-		"chrome" => Some(home_dir().expect("Cannot read $HOME").join(".config/google-chrome")),
-		_ => panic!("Browser not covered")
-	}
+    match browser_name {
+        "firefox" => Some(
+            home_dir()
+                .expect("Cannot read $HOME")
+                .join(".mozilla/firefox"),
+        ),
+        "librewolf" => Some(
+            home_dir()
+                .expect("Cannot read $HOME")
+                .join(".config/librewolf/librewolf"),
+        ),
+        "chrome" => Some(
+            home_dir()
+                .expect("Cannot read $HOME")
+                .join(".config/google-chrome"),
+        ),
+        _ => panic!("Browser not covered"),
+    }
 }
 
 fn get_profile_list(browser_name: &str) -> Vec<String> {
-	let profile_list_file = match browser_name {
-		"firefox" | "librewolf" => "profiles.ini",
-		//"chrome" => "SHIT",
-		_ => panic!("Browser not covered")
-	};
-	let browser_config_profile_root = get_browser_config_profile_root(&browser_name);
-	let profile_list_file_path = browser_config_profile_root
-		.expect("WOOF")
-		.join(profile_list_file);
-	
-	let profiles_list_file_content = Ini::load_from_file(&profile_list_file_path).unwrap();
-	
-	let mut profile_list_vector: Vec<String> = Vec::new();
-	
-	for (section, props) in profiles_list_file_content.iter() {
-		if let Some(section_name) = section {
-			if section_name.starts_with("Profile") {
-				match props.get("Path") {
-					Some(path) => profile_list_vector.push(path.to_owned()),
-					None => panic!("Profile section is missing Path value, skipping..."),
-				}
-			}
-		}
-	}
-	
-	profile_list_vector
+    let profile_list_file = match browser_name {
+        "firefox" | "librewolf" => "profiles.ini",
+        //"chrome" => "SHIT",
+        _ => panic!("Browser not covered"),
+    };
+    let browser_config_profile_root = get_browser_config_profile_root(&browser_name);
+    let profile_list_file_path = browser_config_profile_root
+        .expect("WOOF")
+        .join(profile_list_file);
+
+    let profiles_list_file_content = Ini::load_from_file(&profile_list_file_path).unwrap();
+
+    let mut profile_list_vector: Vec<String> = Vec::new();
+
+    for (section, props) in profiles_list_file_content.iter() {
+        if let Some(section_name) = section {
+            if section_name.starts_with("Profile") {
+                match props.get("Path") {
+                    Some(path) => profile_list_vector.push(path.to_owned()),
+                    None => panic!("Profile section is missing Path value, skipping..."),
+                }
+            }
+        }
+    }
+
+    profile_list_vector
 }
 
 fn get_profile_history(browser_name: &str) -> &str {
-	match browser_name {
-		"firefox" | "librewolf" => "places.sqlite",
-		"chrome" => "History",
-		_ => panic!("Browser not covered")
-	}
+    match browser_name {
+        "firefox" | "librewolf" => "places.sqlite",
+        "chrome" => "History",
+        _ => panic!("Browser not covered"),
+    }
 }
 
-fn browser_history_scan(browser_name: &str, search_vector: Vec<String>) {
+fn browser_history_scan(browser_name: &str, search_vector: &Vec<String>) {
     println!("Scanning browser history...");
-    
-    let browser_config_profile_root = get_browser_config_profile_root(&browser_name)
-										.expect("FRICK");
-	let profile_history = get_profile_history(&browser_name);
-    
+
+    let browser_config_profile_root =
+        get_browser_config_profile_root(&browser_name).expect("FRICK");
+    let profile_history = get_profile_history(&browser_name);
+
     //get history file of a profile
     let profile_list_vector = get_profile_list(&browser_name);
-    
+
     for folder in profile_list_vector {
-		let folder = PathBuf::from(folder);
-		//firefox and its forks uses places.sqlite, chrome uses History which is (sqlite3)
-		let history_file = browser_config_profile_root
-			.join(folder.as_path()).join(get_profile_history(&browser_name));
-		if history_file.is_file() {
-			println!("Scanning {}...", history_file.display());
-			let conn = match browser_name {
-				"firefox" | "librewolf" =>
-					Connection::open(history_file).expect("Cannot open places.sqlite"),
-				//"chrome" =>
-					//Connection::open("History").expect("Cannot open History"),
-				_ => panic!("Browser not covered: {}", browser_name)
-			};
-			let query = match browser_name {
-				"firefox" | "librewolf" => "SELECT url, title FROM moz_places WHERE url LIKE ?1",
-				// "chrome" => "SELECT ??? FROM ??? WHERE ??? LIKE ?1",
-				_ => panic!("Browser not covered: {}", browser_name)
-			};
-			
-			let mut stmt = match conn.prepare(query) {
-				Ok(response) => response,
-				Err(error) => {
-					if let rusqlite::Error::SqliteFailure(err, _) = error {
-						match err.code {
-							rusqlite::ErrorCode::DatabaseBusy => {
-								panic!("The browser history database is locked, perhaps the browser is still running? Close it first.");
-							}
-							_ => panic!("Failed to prepare query due to an error: {:#?}", error),
-						}
-					} else {
-						panic!("Failed to prepare query due to an error: {:#?}", error);
-					}
-				}
-			};
-			
-			for search in &search_vector {
-				//build search querry
-				let pattern = format!("%{}%", search);
-	
-				//prepare query that will search for stuff and execute it
-				let mut rows = stmt.query(params![pattern]).expect("Query failed");
-	
-				// loop through rows
-				while let Some(row) = rows.next().expect("Failed to fetch row") {
-					let url: Option<String> = row.get(0).unwrap_or_default();
-					let title: Option<String> = row.get(1).unwrap_or_default();
-					println!(
-						"Found: url: {}, title: {}",
-						url.unwrap_or_default(),
-						title.unwrap_or_default()
-					);
-				}
-			}
-		} else {
-			println!("{} does not exists. No attempt to scan", history_file.display())
-		}
-	}
+        let folder = PathBuf::from(folder);
+        //firefox and its forks uses places.sqlite, chrome uses History which is (sqlite3)
+        let history_file = browser_config_profile_root
+            .join(folder.as_path())
+            .join(get_profile_history(&browser_name));
+        if history_file.is_file() {
+            println!("Scanning {}...", history_file.display());
+            let conn = match browser_name {
+                "firefox" | "librewolf" => {
+                    Connection::open(history_file).expect("Cannot open places.sqlite")
+                }
+                //"chrome" =>
+                //Connection::open("History").expect("Cannot open History"),
+                _ => panic!("Browser not covered: {}", browser_name),
+            };
+            let query = match browser_name {
+                "firefox" | "librewolf" => "SELECT url, title FROM moz_places WHERE url LIKE ?1",
+                // "chrome" => "SELECT ??? FROM ??? WHERE ??? LIKE ?1",
+                _ => panic!("Browser not covered: {}", browser_name),
+            };
+
+            let mut stmt = match conn.prepare(query) {
+                Ok(response) => response,
+                Err(error) => {
+                    if let rusqlite::Error::SqliteFailure(err, _) = error {
+                        match err.code {
+                            rusqlite::ErrorCode::DatabaseBusy => {
+                                panic!("The browser history database is locked, perhaps the browser is still running? Close it first.");
+                            }
+                            _ => panic!("Failed to prepare query due to an error: {:#?}", error),
+                        }
+                    } else {
+                        panic!("Failed to prepare query due to an error: {:#?}", error);
+                    }
+                }
+            };
+
+            for search in search_vector {
+                //build search querry
+                let pattern = format!("%{}%", search);
+
+                //prepare query that will search for stuff and execute it
+                let mut rows = stmt.query(params![pattern]).expect("Query failed");
+
+                // loop through rows
+                while let Some(row) = rows.next().expect("Failed to fetch row") {
+                    let url: Option<String> = row.get(0).unwrap_or_default();
+                    let title: Option<String> = row.get(1).unwrap_or_default();
+                    println!(
+                        "Found: url: {}, title: {}",
+                        url.unwrap_or_default(),
+                        title.unwrap_or_default()
+                    );
+                }
+            }
+        } else {
+            println!(
+                "{} does not exists. No attempt to scan",
+                history_file.display()
+            )
+        }
+    }
 }
 
 // check file mime type
@@ -293,12 +319,11 @@ fn get_browser_cache_profile_root(browser_name: &str) -> Option<PathBuf> {
         "firefox" => Some(home.join(".cache/firefox")),
         "librewolf" => Some(home.join(".cache/librewolf")),
         "chrome" => Some(home.join(".config/google-chrome")),
-		_ => panic!("No such browser")
+        _ => panic!("No such browser"),
     }
 }
 
 fn get_profile_cache(browser: &str) -> Option<&str> {
-
     match browser {
         "firefox" | "librewolf" => Some("cache2/entries"),
         "chrome" => None,
@@ -308,17 +333,17 @@ fn get_profile_cache(browser: &str) -> Option<&str> {
 
 fn browser_cache_scan(browser_name: &str, video_data: &Vec<VideoData>) {
     println!("Scanning {}'s cache...", browser_name);
-	
-	let profile_list_vector = get_profile_list(&browser_name);
-	
-	let browser_cache_profile_root = get_browser_cache_profile_root(browser_name).expect("DAMN");
+
+    let profile_list_vector = get_profile_list(&browser_name);
+
+    let browser_cache_profile_root = get_browser_cache_profile_root(browser_name).expect("DAMN");
     let profile_cache = get_profile_cache(browser_name).expect("CRAP");
-    
+	
     for folder in profile_list_vector {
         let folder_cache_path = &browser_cache_profile_root
-								.join(PathBuf::from(folder))
-								.join(&profile_cache);
-        
+            .join(PathBuf::from(folder))
+            .join(&profile_cache);
+
         if folder_cache_path.is_dir() {
             println!("Scanning {:?}", folder_cache_path);
             if let Ok(cache_entries) = fs::read_dir(&folder_cache_path) {
@@ -328,16 +353,19 @@ fn browser_cache_scan(browser_name: &str, video_data: &Vec<VideoData>) {
                     if cache_entry_path.is_file() {
                         //initialize vector of similarity values
                         let mut similarity = Vec::new();
-                        
+                        let mut similarity_pack = Vec::new();
+
                         let buf = fs::read(&cache_entry_path).unwrap();
-                        if infer::is_video(&buf) {//|| infer::is_image(&buf){
-							//println!("{:?}", cache_entry_path);
+                        if infer::is_video(&buf) {
+                            //|| infer::is_image(&buf){
+                            //println!("{:?}", cache_entry_path);
                             //extract frame and gen hash
                             let cache_entry_file_name = &cache_entry_path
                                 .file_name()
                                 .unwrap()
                                 .to_string_lossy()
                                 .into_owned();
+							println!("Checking {}", cache_entry_file_name);
 
                             //if the temporary dir is there remove it
                             //if not, create it, use it and then remove it
@@ -355,32 +383,66 @@ fn browser_cache_scan(browser_name: &str, video_data: &Vec<VideoData>) {
                                 PathBuf::from(&tmp_file),
                             );
 							
-							//check every raw frame of a cached video
-							//against every hash in video_data.txt
-                            for file in fs::read_dir(&potential_file_path).unwrap() {
-                                // search dir for all raw files
-                                let path = file.unwrap().path();
-                                let filepath = path.to_str().unwrap();
-								
-                                let hash_to_check = phash_ai_slop::generate_phash(filepath);
-								
-								for video_data_entry in video_data {
-									println!("{:?}", video_data_entry.title);
-									//put the list of frames similarity into a vector,
-									//and then find the smallest number in that vector
-									for &video_data_entry_hash in &video_data_entry.hash {
-										let result = hamming(video_data_entry_hash, hash_to_check);
+							for video_data_entry in video_data {
+								println!("{:?}", video_data_entry.title);
+								for file in fs::read_dir(&potential_file_path).unwrap() {
+									let path = file
+													.unwrap()
+													.path();
+									let filepath = path
+													.to_str()
+													.unwrap();
+									let hash_to_check = phash_ai_slop::generate_phash(filepath);
+									for &video_entry_hash in &video_data_entry.hash {
+										let result = hamming(video_entry_hash, hash_to_check);
 										similarity.push(result);
 									}
-									//show the smallest number from the vector
-									match similarity.iter().min() {
-										Some(v) => println!("Closest similarity to {} is {}",
-															&cache_entry_path.to_str().unwrap(), v),
+									match similarity.iter().min().cloned() {
+										//Some(v) => println!(
+										//	"Closest similarity to {} is {}",
+										//	&cache_entry_path.to_str().unwrap(),
+										//	v
+										//),
+										Some(v) => similarity_pack.push(v),
 										None => println!("No hashes in vector!"),
 									}
 								}
+								println!("Similarity: {:?}", similarity_pack.iter().min().unwrap());
 							}
+							
+							/// DO A SWITCHEROO. FOR ENTRY IN DATABASE NOT FOR RAW FILE OF A VIDEO
 
+                            //check every raw frame of a cached video
+                            //against every hash in video_data.txt
+                            //for file in fs::read_dir(&potential_file_path).unwrap() {
+                                // search dir for all raw files
+                                //let path = file.unwrap().path();
+                                //let filepath = path.to_str().unwrap();
+
+                                //let hash_to_check = phash_ai_slop::generate_phash(filepath);
+
+                                //for video_data_entry in video_data {
+                                    //println!("{:?}", video_data_entry.title);
+                                    //put the list of frames similarity into a vector,
+                                    //and then find the smallest number in that vector
+                                    //for &video_data_entry_hash in &video_data_entry.hash {
+                                        //let result = hamming(video_data_entry_hash, hash_to_check);
+                                        //similarity.push(result);
+                                    //}
+                                    //show the smallest number from the vector
+                                    //match similarity.iter().min() {
+                                        //Some(v) => println!(
+                                            //"Closest similarity to {} is {}",
+                                            //&cache_entry_path.to_str().unwrap(),
+                                            //v
+                                        //),
+                                        //None => println!("No hashes in vector!"),
+                                    //}
+                                //}
+                            //}
+                            ///END OF SWITCHEROO
+                            
+							//remove raw files, after usage
                             if potential_file_path.is_dir() {
                                 fs::remove_dir_all(&potential_file_path).unwrap();
                             }
@@ -403,11 +465,15 @@ fn extract_videoframes(input_file: PathBuf, output_file: PathBuf) {
 
     FfmpegCommand::new()
         .args([
-            "-i", input,
-            "-vf", "scale=32:32",
-            "-pix_fmt", "gray",
+            "-i",
+            input,
+            "-vf",
+            "scale=32:32",
+            "-pix_fmt",
+            "gray",
             //"-f", "rawvideo",
-            "-f", "image2",
+            "-f",
+            "image2",
             output,
         ])
         .spawn()
@@ -416,6 +482,7 @@ fn extract_videoframes(input_file: PathBuf, output_file: PathBuf) {
         .expect("ffmpeg gave up :(");
 }
 
+///Calculates the difference between two given hashes
 fn hamming(a: u64, b: u64) -> u32 {
     (a ^ b).count_ones()
 }
@@ -423,15 +490,16 @@ fn hamming(a: u64, b: u64) -> u32 {
 fn main() {
     //load dataset
     let dataset = load_dataset(); //<-- DONE
-    
-    //search video ids in browser
-    
-    browser_history_scan("librewolf", dataset.history_data); //<--DONE FOR LIBREWOLF/FIREFOX
-    
+
+    //search video ids in browser history
+    //for browser in vec!["firefox","librewolf"] {
+    //    browser_history_scan(browser, &dataset.history_data); //<--DONE FOR LIBREWOLF/FIREFOX
+    //}
     //scan browsers cache for cached files
     for browser in vec!["librewolf"] {
-		browser_cache_scan(browser, &dataset.video_data); //<--DONE FOR LIBREWOLF/FIREFOX
-	};
-    
+    	browser_cache_scan(browser, &dataset.video_data); //<--DONE FOR LIBREWOLF/FIREFOX
+    };
+	
+
     println!("Done!");
 }
