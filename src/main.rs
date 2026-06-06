@@ -23,6 +23,7 @@
 // TODO Do something about the ffmpeg bottlneck maybe...
 
 mod phash_ai_slop;
+mod dataset;
 
 use dirs::home_dir;
 use ffmpeg_sidecar::command::FfmpegCommand;
@@ -32,8 +33,6 @@ use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::{env, fs};
-
-use std::collections::HashMap;
 
 //Constants and statics, mainly paths. LazyLock is a saviour <3
 //MOVE ALL THOSE TO MATCH FUNCTIONS
@@ -46,132 +45,6 @@ static BASE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
 
     path
 });
-
-static DATA_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    let path = BASE_DIR.join("data");
-    if !path.is_dir() {
-        panic!("Cannot read data dir!: {}", path.display());
-    }
-
-    path
-});
-
-///This struct is meant consume contents of files in "data" directory
-///See VideoData for special treatment of video_data.txt
-struct DataSet {
-    video_data: Vec<VideoData>,
-    watch_page_data: Vec<String>,
-    asset_data: Vec<String>,
-    history_data: Vec<String>,
-}
-
-///This struct is meant to consume contents of video_data.txt.
-///Every line is split by "|" separator and every part is put to the corresponding key
-///
-///Example:
-///
-///"Roblox+Video+101|-8128339497863628282,39c9cb3870db6751|0000000000000000|00:03:52.43|00:03:52.63"
-///
-///VIDEO TITLE|GOOGLE_VIDEO_ID,GOOGLE_VIDEO_CONTENT_ID|HASH|DUR_MIN|DUR_MAX
-
-struct VideoData {
-    //IN video_data.txt THIS IS A REGEX SPERATED BY + (i think)
-    ///Title of a video.
-    ///It's meant to consume a string with + signs instead of spaces. Perhaps a regex attempt.
-    title: String,
-    ///Ids of a video.
-    ///It's meant to consume vector of strings out of a string splited by ",".
-    ids: Vec<String>,
-    ///Hash of a video.
-    ///It's meant to consume a u64 converted from a string.
-    hash: Vec<u64>,
-    ///Minimal duration of a searched video.
-    duration_min: String,
-    ///Maximal duration of a searched video.
-    duration_max: String,
-}
-
-fn read_lines(path: impl AsRef<Path>) -> Vec<String> {
-    read_to_string(path.as_ref())
-        .expect("Error reading file")
-        .lines()
-        .map(String::from)
-        .collect()
-}
-
-///Loads all files from "data" directory into fields of DataSet.
-fn load_dataset() -> DataSet {
-    //Loading dataset
-    //Read lines of video_data.txt
-    let video_data_path = DATA_DIR.join("video_data.txt");
-    let video_data = read_lines(&video_data_path);
-
-    let mut video_data_struct_vec: Vec<VideoData> = Vec::new();
-
-    //process each line of the file
-    for entry in video_data {
-        //remove quotes from the line
-        let entry_sanitised = &entry
-            .strip_prefix('"')
-            .and_then(|entry| entry.strip_suffix('"'))
-            .unwrap_or(&entry);
-        //split the line by "|" into a vector
-        let entry_vec: Vec<&str> = entry_sanitised.split("|").collect();
-        if entry_vec.len() != 5 {
-            panic!("Some entry has less than 5 elements!"); // panic when not enough data!!!
-        };
-
-        //create VideoData structure from vector
-        let entry_struct = VideoData {
-            title: entry_vec[0].to_string(),
-            ids: entry_vec[1]
-                .split(",") //split ids by ","
-                .map(|p| p.to_string())
-                .collect(),
-            hash: entry_vec[2]
-                .split(",")
-                .filter_map(|h| u64::from_str_radix(h, 16).ok())
-                .collect(),
-            duration_min: entry_vec[3].to_string(),
-            duration_max: entry_vec[4].to_string(),
-        };
-
-        video_data_struct_vec.push(entry_struct);
-    }
-    println!(
-        "Loaded {} entries from {}",
-        video_data_struct_vec.len(),
-        video_data_path.display()
-    );
-    let watch_page_data_path = DATA_DIR.join("watch_page_data.txt");
-    let watch_page_data = read_lines(&watch_page_data_path);
-    println!(
-        "Loaded {} entries from {}",
-        watch_page_data.len(),
-        watch_page_data_path.display()
-    );
-    let asset_data_path = DATA_DIR.join("asset_data.txt");
-    let asset_data = read_lines(&asset_data_path);
-    println!(
-        "Loaded {} entries from {}",
-        asset_data.len(),
-        asset_data_path.display()
-    );
-    let history_data_path = DATA_DIR.join("history_data.txt");
-    let history_data = read_lines(&history_data_path);
-    println!(
-        "Loaded {} entries from {}",
-        history_data.len(),
-        history_data_path.display()
-    );
-
-    DataSet {
-        video_data: video_data_struct_vec,
-        watch_page_data: watch_page_data,
-        asset_data: asset_data,
-        history_data: history_data,
-    }
-}
 
 fn get_browser_config_profile_root(browser_name: &str) -> Option<PathBuf> {
     match browser_name {
@@ -331,14 +204,14 @@ fn get_profile_cache(browser: &str) -> Option<&str> {
     }
 }
 
-fn browser_cache_scan(browser_name: &str, video_data: &Vec<VideoData>) {
+fn browser_cache_scan(browser_name: &str, video_data: &Vec<dataset::VideoData>) {
     println!("Scanning {}'s cache...", browser_name);
 
     let profile_list_vector = get_profile_list(&browser_name);
 
     let browser_cache_profile_root = get_browser_cache_profile_root(browser_name).expect("DAMN");
     let profile_cache = get_profile_cache(browser_name).expect("CRAP");
-	
+
     for folder in profile_list_vector {
         let folder_cache_path = &browser_cache_profile_root
             .join(PathBuf::from(folder))
@@ -365,7 +238,7 @@ fn browser_cache_scan(browser_name: &str, video_data: &Vec<VideoData>) {
                                 .unwrap()
                                 .to_string_lossy()
                                 .into_owned();
-							println!("Checking {}", cache_entry_file_name);
+                            println!("Checking {}", cache_entry_file_name);
 
                             //if the temporary dir is there remove it
                             //if not, create it, use it and then remove it
@@ -382,67 +255,31 @@ fn browser_cache_scan(browser_name: &str, video_data: &Vec<VideoData>) {
                                 PathBuf::from(&cache_entry_path),
                                 PathBuf::from(&tmp_file),
                             );
-							
-							for video_data_entry in video_data {
-								println!("{:?}", video_data_entry.title);
-								for file in fs::read_dir(&potential_file_path).unwrap() {
-									let path = file
-													.unwrap()
-													.path();
-									let filepath = path
-													.to_str()
-													.unwrap();
-									let hash_to_check = phash_ai_slop::generate_phash(filepath);
-									for &video_entry_hash in &video_data_entry.hash {
-										let result = hamming(video_entry_hash, hash_to_check);
-										similarity.push(result);
-									}
-									match similarity.iter().min().cloned() {
-										//Some(v) => println!(
-										//	"Closest similarity to {} is {}",
-										//	&cache_entry_path.to_str().unwrap(),
-										//	v
-										//),
-										Some(v) => similarity_pack.push(v),
-										None => println!("No hashes in vector!"),
-									}
-								}
-								println!("Similarity: {:?}", similarity_pack.iter().min().unwrap());
-							}
-							
-							/// DO A SWITCHEROO. FOR ENTRY IN DATABASE NOT FOR RAW FILE OF A VIDEO
 
-                            //check every raw frame of a cached video
-                            //against every hash in video_data.txt
-                            //for file in fs::read_dir(&potential_file_path).unwrap() {
-                                // search dir for all raw files
-                                //let path = file.unwrap().path();
-                                //let filepath = path.to_str().unwrap();
-
-                                //let hash_to_check = phash_ai_slop::generate_phash(filepath);
-
-                                //for video_data_entry in video_data {
-                                    //println!("{:?}", video_data_entry.title);
-                                    //put the list of frames similarity into a vector,
-                                    //and then find the smallest number in that vector
-                                    //for &video_data_entry_hash in &video_data_entry.hash {
-                                        //let result = hamming(video_data_entry_hash, hash_to_check);
-                                        //similarity.push(result);
-                                    //}
-                                    //show the smallest number from the vector
-                                    //match similarity.iter().min() {
+                            for video_data_entry in video_data {
+                                println!("{:?}", video_data_entry.title);
+                                for file in fs::read_dir(&potential_file_path).unwrap() {
+                                    let path = file.unwrap().path();
+                                    let filepath = path.to_str().unwrap();
+                                    let hash_to_check = phash_ai_slop::generate_phash(filepath);
+                                    for &video_entry_hash in &video_data_entry.hash {
+                                        let result = hamming(video_entry_hash, hash_to_check);
+                                        similarity.push(result);
+                                    }
+                                    match similarity.iter().min().cloned() {
                                         //Some(v) => println!(
-                                            //"Closest similarity to {} is {}",
-                                            //&cache_entry_path.to_str().unwrap(),
-                                            //v
+                                        //	"Closest similarity to {} is {}",
+                                        //	&cache_entry_path.to_str().unwrap(),
+                                        //	v
                                         //),
-                                        //None => println!("No hashes in vector!"),
-                                    //}
-                                //}
-                            //}
-                            ///END OF SWITCHEROO
-                            
-							//remove raw files, after usage
+                                        Some(v) => similarity_pack.push(v),
+                                        None => println!("No hashes in vector!"),
+                                    }
+                                }
+                                println!("Similarity: {:?}", similarity_pack.iter().min().unwrap());
+                            }
+
+                            //remove temp directories with raw files afterwards
                             if potential_file_path.is_dir() {
                                 fs::remove_dir_all(&potential_file_path).unwrap();
                             }
@@ -489,7 +326,7 @@ fn hamming(a: u64, b: u64) -> u32 {
 
 fn main() {
     //load dataset
-    let dataset = load_dataset(); //<-- DONE
+    let dataset = dataset::load_dataset(BASE_DIR.join("data")); //<-- DONE
 
     //search video ids in browser history
     //for browser in vec!["firefox","librewolf"] {
@@ -497,9 +334,8 @@ fn main() {
     //}
     //scan browsers cache for cached files
     for browser in vec!["librewolf"] {
-    	browser_cache_scan(browser, &dataset.video_data); //<--DONE FOR LIBREWOLF/FIREFOX
-    };
-	
+        browser_cache_scan(browser, &dataset.video_data); //<--DONE FOR LIBREWOLF/FIREFOX
+    }
 
     println!("Done!");
 }
