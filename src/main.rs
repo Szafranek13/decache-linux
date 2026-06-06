@@ -22,12 +22,13 @@
 // not the other way around.
 // TODO Do something about the ffmpeg bottlneck maybe...
 
-mod phash_ai_slop;
 mod dataset;
+mod phash_ai_slop;
 
 use dirs::home_dir;
 use ffmpeg_sidecar::command::FfmpegCommand;
 use ini::Ini;
+use serde_json::Value;
 use rusqlite::{params, Connection};
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
@@ -47,22 +48,24 @@ static BASE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
 });
 
 fn get_browser_config_profile_root(browser_name: &str) -> Option<PathBuf> {
+    let home_dir = home_dir().expect("Cannot read $HOME");
     match browser_name {
         "firefox" => Some(
-            home_dir()
-                .expect("Cannot read $HOME")
+            home_dir
                 .join(".mozilla/firefox"),
-        ),
+		),
         "librewolf" => Some(
-            home_dir()
-                .expect("Cannot read $HOME")
+            home_dir
                 .join(".config/librewolf/librewolf"),
         ),
         "chrome" => Some(
-            home_dir()
-                .expect("Cannot read $HOME")
+            home_dir
                 .join(".config/google-chrome"),
         ),
+        "chromium" => Some(
+			home_dir
+				.join(".config/chromium"),
+		),
         _ => panic!("Browser not covered"),
     }
 }
@@ -70,7 +73,7 @@ fn get_browser_config_profile_root(browser_name: &str) -> Option<PathBuf> {
 fn get_profile_list(browser_name: &str) -> Vec<String> {
     let profile_list_file = match browser_name {
         "firefox" | "librewolf" => "profiles.ini",
-        //"chrome" => "SHIT",
+        "chrome" | "chromium" => "Local State", //a json file
         _ => panic!("Browser not covered"),
     };
     let browser_config_profile_root = get_browser_config_profile_root(&browser_name);
@@ -78,20 +81,39 @@ fn get_profile_list(browser_name: &str) -> Vec<String> {
         .expect("WOOF")
         .join(profile_list_file);
 
-    let profiles_list_file_content = Ini::load_from_file(&profile_list_file_path).unwrap();
-
-    let mut profile_list_vector: Vec<String> = Vec::new();
-
-    for (section, props) in profiles_list_file_content.iter() {
-        if let Some(section_name) = section {
-            if section_name.starts_with("Profile") {
-                match props.get("Path") {
-                    Some(path) => profile_list_vector.push(path.to_owned()),
-                    None => panic!("Profile section is missing Path value, skipping..."),
-                }
-            }
-        }
-    }
+	let mut profile_list_vector: Vec<String> = Vec::new();
+	
+	let profiles_list_file_content = fs::read_to_string(profile_list_file_path).expect("Could not read file.");
+	
+	match browser_name {
+		"firefox" | "librewolf" => {
+			let profiles_list_ini = Ini::load_from_str(&profiles_list_file_content)
+										.unwrap();
+			for (section, props) in profiles_list_ini.iter() {
+				if let Some(section_name) = section {
+					if section_name.starts_with("Profile") {
+						match props.get("Path") {
+							Some(path) => profile_list_vector.push(path.to_owned()),
+							None => panic!("Profile section is missing Path value, skipping..."),
+						}
+					}
+				}
+			}
+		},
+		"chrome" | "chromium" => {
+			let profile_list_json: Value = serde_json::from_str(&profiles_list_file_content)
+								.unwrap();
+			
+			    if let Some(profiles) = profile_list_json["profile"]["info_cache"].as_object() {
+					for (profile_dir, _) in profiles {
+						profile_list_vector.push(profile_dir.to_owned())
+					}
+				} else {
+					panic!("No profiles found in Local State");
+				}
+			},
+		_ => panic!("DAMN"),
+	}
 
     profile_list_vector
 }
@@ -99,7 +121,7 @@ fn get_profile_list(browser_name: &str) -> Vec<String> {
 fn get_profile_history(browser_name: &str) -> &str {
     match browser_name {
         "firefox" | "librewolf" => "places.sqlite",
-        "chrome" => "History",
+        "chrome" | "chromium" => "History",
         _ => panic!("Browser not covered"),
     }
 }
@@ -109,9 +131,9 @@ fn browser_history_scan(browser_name: &str, search_vector: &Vec<String>) {
 
     let browser_config_profile_root =
         get_browser_config_profile_root(&browser_name).expect("FRICK");
-    let profile_history = get_profile_history(&browser_name);
-
+    
     //get history file of a profile
+    let profile_history = get_profile_history(&browser_name);
     let profile_list_vector = get_profile_list(&browser_name);
 
     for folder in profile_list_vector {
@@ -119,23 +141,24 @@ fn browser_history_scan(browser_name: &str, search_vector: &Vec<String>) {
         //firefox and its forks uses places.sqlite, chrome uses History which is (sqlite3)
         let history_file = browser_config_profile_root
             .join(folder.as_path())
-            .join(get_profile_history(&browser_name));
+            .join(profile_history);
         if history_file.is_file() {
             println!("Scanning {}...", history_file.display());
             let conn = match browser_name {
                 "firefox" | "librewolf" => {
                     Connection::open(history_file).expect("Cannot open places.sqlite")
                 }
-                //"chrome" =>
-                //Connection::open("History").expect("Cannot open History"),
+                "chrome" | "chromium" => {
+					Connection::open(history_file).expect("Cannot open History")
+				}
                 _ => panic!("Browser not covered: {}", browser_name),
             };
             let query = match browser_name {
                 "firefox" | "librewolf" => "SELECT url, title FROM moz_places WHERE url LIKE ?1",
-                // "chrome" => "SELECT ??? FROM ??? WHERE ??? LIKE ?1",
+                "chrome" | "chromium" => "SELECT url, title FROM urls WHERE url LIKE ?1",
                 _ => panic!("Browser not covered: {}", browser_name),
             };
-
+		
             let mut stmt = match conn.prepare(query) {
                 Ok(response) => response,
                 Err(error) => {
@@ -192,6 +215,7 @@ fn get_browser_cache_profile_root(browser_name: &str) -> Option<PathBuf> {
         "firefox" => Some(home.join(".cache/firefox")),
         "librewolf" => Some(home.join(".cache/librewolf")),
         "chrome" => Some(home.join(".config/google-chrome")),
+        "chromium" => Some(home.join(".config/chromium/")),
         _ => panic!("No such browser"),
     }
 }
@@ -329,13 +353,15 @@ fn main() {
     let dataset = dataset::load_dataset(BASE_DIR.join("data")); //<-- DONE
 
     //search video ids in browser history
-    //for browser in vec!["firefox","librewolf"] {
-    //    browser_history_scan(browser, &dataset.history_data); //<--DONE FOR LIBREWOLF/FIREFOX
-    //}
-    //scan browsers cache for cached files
-    for browser in vec!["librewolf"] {
-        browser_cache_scan(browser, &dataset.video_data); //<--DONE FOR LIBREWOLF/FIREFOX
+    for browser in vec!["chromium"] {
+        browser_history_scan(browser, &dataset.history_data); //<--DONE FOR LIBREWOLF/FIREFOX
     }
+    //scan browsers cache for cached files
+//    for browser in vec!["librewolf"] {
+//        browser_cache_scan(browser, &dataset.video_data); //<--DONE FOR LIBREWOLF/FIREFOX
+//    }
 
+	get_profile_list("chromium");
+	
     println!("Done!");
 }

@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use std::fs::read_to_string;
+use std::path::{Path, PathBuf};
 ///This struct is meant consume contents of files in "data" directory
 ///See VideoData for special treatment of video_data.txt
 pub struct DataSet {
