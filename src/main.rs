@@ -18,16 +18,22 @@
 // in separate functions NOT in browser_cache_scan...
 // TODO Make "0000000000000000" hash be a None.
 // TODO Do something about the ffmpeg bottlneck maybe...
-// TODO The most important functions (scanning) should return Result propperly instead of panicing
+// TODO The most important functions (or all of them) should return Result propperly instead of panicing
 // TODO Chrome/Chromium stores cache in a weird format, process it
+// TODO Original skips looking into cache entries that are from web.archive.org
 
 //The original script seems to copy only MP4 FLV and WEBM video files to Unveryfied
 //It also checks if a video file it found is complete by checking if it has ftyp at the beggining of file
-//if it doesnt then it's not a first piece of a video, but the middle or the final, and then it 
+//if it doesnt then it's not a first piece of a video, but the middle or the final, and then it
 //concentate them
 //
 
-mod browser_paths;
+
+mod browsette;
+use crate::browsette::{BrowserName, BrowserFamily};
+
+mod cache2_metadata;
+mod cache2_entry_metadata;
 mod dataset;
 mod phash_ai_slop;
 
@@ -52,8 +58,8 @@ static BASE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     path
 });
 
-fn detect_browsers(browser_paths: Vec<browser_paths::Browser>) -> Vec<browser_paths::Browser> {
-    let mut detected_browser_paths: Vec<browser_paths::Browser> = Vec::new();
+fn detect_browsers(browser_paths: &[browsette::Browser]) -> Vec<&browsette::Browser> {
+    let mut detected_browser_paths = Vec::new();
     let home_dir = home_dir().expect("Cannot read $HOME");
     for browser in browser_paths {
         if home_dir.join(browser.config_path).is_dir() {
@@ -63,7 +69,7 @@ fn detect_browsers(browser_paths: Vec<browser_paths::Browser>) -> Vec<browser_pa
     detected_browser_paths
 }
 
-fn get_profile_list(browser: &browser_paths::Browser) -> Vec<String> {
+fn get_profile_list(browser: &browsette::Browser) -> Vec<String> {
     let home_dir = home_dir().expect("Cannot read $HOME");
 
     let browser_config_profile_root = home_dir.join(browser.config_path);
@@ -73,8 +79,8 @@ fn get_profile_list(browser: &browser_paths::Browser) -> Vec<String> {
     let profiles_list_file_content =
         fs::read_to_string(profile_list_file_path).expect("Could not read file.");
 
-    match browser.name {
-        "firefox" | "librewolf" => {
+    match browser.family {
+       BrowserFamily::Gecko => {
             let profiles_list_ini = Ini::load_from_str(&profiles_list_file_content).unwrap();
             for (section, props) in profiles_list_ini.iter() {
                 if let Some(section_name) = section {
@@ -87,7 +93,7 @@ fn get_profile_list(browser: &browser_paths::Browser) -> Vec<String> {
                 }
             }
         }
-        "chrome" | "chromium" => {
+        BrowserFamily::Chromium => {
             let profile_list_json: Value =
                 serde_json::from_str(&profiles_list_file_content).unwrap();
 
@@ -105,7 +111,7 @@ fn get_profile_list(browser: &browser_paths::Browser) -> Vec<String> {
     profile_list_vector
 }
 
-fn browser_history_scan(browser: &browser_paths::Browser, search_vector: &Vec<String>) {
+fn browser_history_scan(browser: &browsette::Browser, search_vector: &Vec<String>) {
     println!("Scanning {}'s history...", &browser.name);
     let home_dir = home_dir().expect("No $HOME dir");
 
@@ -124,46 +130,49 @@ fn browser_history_scan(browser: &browser_paths::Browser, search_vector: &Vec<St
             println!("Scanning {}...", history_file.display());
             let conn = Connection::open(history_file).expect("Cannot open history database");
 
-            let query = match browser.name {
-                "firefox" | "librewolf" => "SELECT url, title FROM moz_places WHERE url LIKE ?1",
-                "chrome" | "chromium" => "SELECT url, title FROM urls WHERE url LIKE ?1",
+            let query = match browser.family {
+                BrowserFamily::Gecko => "SELECT url, title FROM moz_places WHERE url LIKE ?1",
+                BrowserFamily::Chromium => "SELECT url, title FROM urls WHERE url LIKE ?1",
                 _ => panic!("Browser not supported"),
             };
 
-            let mut stmt = match conn.prepare(query) {
-                Ok(response) => response,
+            match conn.prepare(query) {
+                Ok(mut response) => {
+                    for search in search_vector {
+                        //build search querry
+                        let pattern = format!("%{}%", search);
+
+                        //prepare query that will search for stuff and execute it
+                        let mut rows = response.query(params![pattern]).expect("Query failed");
+
+                        // loop through rows
+                        while let Some(row) = rows.next().expect("Failed to fetch row") {
+                            let url: Option<String> = row.get(0).unwrap_or_default();
+                            let title: Option<String> = row.get(1).unwrap_or_default();
+                            println!(
+                                "Found: url: {}, title: {}",
+                                url.unwrap_or_default(),
+                                title.unwrap_or_default()
+                            );
+                        }
+                    }
+                }
                 Err(error) => {
                     if let rusqlite::Error::SqliteFailure(err, _) = error {
                         match err.code {
                             rusqlite::ErrorCode::DatabaseBusy => {
-                                panic!("The browser history database is locked, perhaps the browser is still running? Close it first.");
+                                eprintln!("The browser history database is locked, perhaps the browser is still running? Close it first. No attempt to scan.");
                             }
-                            _ => panic!("Failed to prepare query due to an error: {:#?}", error),
+                            _ => eprintln!("Failed to prepare query due to an error: {:#?}. No attempt to scan.", error),
                         }
                     } else {
-                        panic!("Failed to prepare query due to an error: {:#?}", error);
+                        panic!(
+                            "Failed to prepare query due to an error: {:#?}. No attempt to scan.",
+                            error
+                        );
                     }
                 }
             };
-
-            for search in search_vector {
-                //build search querry
-                let pattern = format!("%{}%", search);
-
-                //prepare query that will search for stuff and execute it
-                let mut rows = stmt.query(params![pattern]).expect("Query failed");
-
-                // loop through rows
-                while let Some(row) = rows.next().expect("Failed to fetch row") {
-                    let url: Option<String> = row.get(0).unwrap_or_default();
-                    let title: Option<String> = row.get(1).unwrap_or_default();
-                    println!(
-                        "Found: url: {}, title: {}",
-                        url.unwrap_or_default(),
-                        title.unwrap_or_default()
-                    );
-                }
-            }
         } else {
             println!(
                 "{} does not exists. No attempt to scan",
@@ -174,22 +183,122 @@ fn browser_history_scan(browser: &browser_paths::Browser, search_vector: &Vec<St
 }
 
 // check file mime type
-fn check_filetype(path: impl AsRef<Path>) -> String {//Option<String> {
-	match infer::get_from_path(path).expect("Fuk") {
-		Some(kind) => kind.extension().to_string(),
-		None => "Unknown".to_string(),
-	}
+fn check_filetype(path: impl AsRef<Path>) -> String {
+    //Option<String> {
+    match infer::get_from_path(path).expect("Fuk") {
+        Some(kind) => kind.extension().to_string(),
+        None => "Unknown".to_string(),
+    }
 }
 
-
+// Copying from and to (Un)Veryfied dir
+fn safely_copy(source: impl AsRef<Path>, destination: impl AsRef<Path>) -> std::io::Result<()> {
+    let (source, destination) = (source.as_ref(), destination.as_ref());
+    if !destination.is_file() {
+        fs::copy(source, destination)?;
+    } else {
+        println!("{} already in {}", source.display(), destination.display());
+    }
+    Ok(())
+}
 //Check if mp4 file is a complete file or just a part of a longer video
 fn check_if_video_stream_is_complete() {
-	todo!();
+    todo!();
+}
+
+fn browser_cache_asset_scan(browser: &browsette::Browser, asset_data: &[String]) {
+    println!(
+        "Scanning {}'s cache for asset_data.txt entries...",
+        browser.name
+    );
+
+    let home_dir = home_dir().expect("Cannot read $HOME");
+
+    let profile_list_vector = get_profile_list(&browser);
+
+    let browser_cache_profile_root = home_dir.join(browser.cache_path);
+    let profile_cache = browser.cache_entries_path;
+
+    for folder in profile_list_vector {
+        let folder_cache_path = &browser_cache_profile_root.join(folder).join(&profile_cache);
+
+        if folder_cache_path.is_dir() {
+            print!("Scanning {:?}", folder_cache_path);
+            if let Ok(cache_entries) = fs::read_dir(&folder_cache_path) {
+                for cache_entry in cache_entries {
+                    let cache_entry_path = cache_entry.unwrap().path();
+                    //is it a file
+                    if cache_entry_path.is_file() {
+                        //initialize vector of similarity values
+                        let cache_entry_file_name = &cache_entry_path
+                            .file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .into_owned();
+                        println!("Checking {}", cache_entry_file_name);
+                        let entry_url = cache2_entry_metadata::get_metadata(&cache_entry_path.to_str().unwrap());
+                        println!("{:?}", entry_url);
+                        todo!();
+                        //                                    for (i, asset_data_entry) in asset_data.into_iter().enumerate() {
+
+                        /*
+                            for (i, video_data_entry) in video_data.into_iter().enumerate() {
+                                for file in fs::read_dir(&potential_file_path).unwrap() {
+                                    let path = file.unwrap().path();
+                                    let filepath = path.to_str().unwrap();
+                                    let hash_to_check = phash_ai_slop::generate_phash(filepath);
+                                    for &video_entry_hash in &video_data_entry.hash {
+                                        let result = hamming(video_entry_hash, hash_to_check);
+                                        similarity.push(result);
+                                    }
+                                    match similarity.iter().min().cloned() {
+                                        //Some(v) => println!(
+                                        //	"Closest similarity to {} is {}",
+                                        //	&cache_entry_path.to_str().unwrap(),
+                                        //	v
+                                        //),
+                                        Some(v) => similarity_pack.push(v),
+                                        None => println!("No hashes in vector!"),
+                                    }
+                                }
+                                use std::io::{self, Write};
+                                print!("{i} /600\r");
+                                io::stdout().flush().unwrap();
+                                let similarity_final = similarity_pack.iter().min().unwrap();
+                                //only if similarity difference is less than 5
+                                if *similarity_final < 5 as u32 {
+                                    println!();
+                                    println!("Closest similarity of {:?} is {:?}", video_data_entry.title, similarity_final);
+                                    let copy_destination = PathBuf::from("./Unverified/{}").join(&cache_entry_path);
+                                    safely_copy(&cache_entry_path, PathBuf::from(copy_destination)).expect("Poop");
+                                }
+                            }
+
+                            //remove temp directories with raw files afterwards
+                            if potential_file_path.is_dir() {
+                                fs::remove_dir_all(&potential_file_path).unwrap();
+                            }
+                        }*/
+                    }
+                }
+            } else {
+                println!("Cannot read folder {:?}", folder_cache_path);
+            }
+        } else {
+            println!("No cache folder found in profile {:?}", folder_cache_path)
+        }
+    }
 }
 
 /// Scans browser's cache for video files
-fn browser_cache_scan(browser: &browser_paths::Browser, video_data: &Vec<dataset::VideoData>) {
-    println!("Scanning {}'s cache...", browser.name);
+fn browser_cache_video_scan(
+    browser: &browsette::Browser,
+    video_data: &[dataset::VideoData],
+) {
+    println!(
+        "Scanning {}'s cache for video_data.txt entries...",
+        browser.name
+    );
 
     let home_dir = home_dir().expect("Cannot read $HOME");
 
@@ -213,8 +322,8 @@ fn browser_cache_scan(browser: &browser_paths::Browser, video_data: &Vec<dataset
                         let mut similarity_pack = Vec::new();
 
                         let filetype = check_filetype(&cache_entry_path);
-						
-						if ["mp4", "webm", "flv"].contains(&filetype.as_str()) {
+
+                        if ["mp4", "webm", "flv"].contains(&filetype.as_str()) {
                             //|| infer::is_image(&buf){
                             //println!("{:?}", cache_entry_path);
                             //extract frame and gen hash
@@ -267,9 +376,16 @@ fn browser_cache_scan(browser: &browser_paths::Browser, video_data: &Vec<dataset
                                 let similarity_final = similarity_pack.iter().min().unwrap();
                                 //only if similarity difference is less than 5
                                 if *similarity_final < 5 as u32 {
-									println!();
-									println!("Closest similarity of {:?} is {:?}", video_data_entry.title, similarity_final);
-								}
+                                    println!();
+                                    println!(
+                                        "Closest similarity of {:?} is {:?}",
+                                        video_data_entry.title, similarity_final
+                                    );
+                                    let copy_destination =
+                                        PathBuf::from("./Verified/{}").join(&cache_entry_path);
+                                    safely_copy(&cache_entry_path, PathBuf::from(copy_destination))
+                                        .expect("Couldn't!");
+                                }
                             }
 
                             //remove temp directories with raw files afterwards
@@ -319,20 +435,23 @@ fn hamming(a: u64, b: u64) -> u32 {
 
 fn main() {
     //load browser paths
-    let browser_paths = browser_paths::SUPPORTED_BROWSERS.to_vec();
+    let browser_paths = browsette::SUPPORTED_BROWSERS;
     //detect browsers installed on the pc
     let detected_browsers = detect_browsers(browser_paths);
     println!("{:#?}", &detected_browsers);
 
     //load dataset
     let dataset = dataset::load_dataset(BASE_DIR.join("data")); //<-- DONE
-
+    /*
     for browser in &detected_browsers {
         //search video ids in browser history
         browser_history_scan(&browser, &dataset.history_data); //<--DONE FOR LIBREWOLF/FIREFOX/CHROME/CHROMIUM
     }
     for browser in &detected_browsers {
-        browser_cache_scan(&browser, &dataset.video_data); //<--DONE FOR LIBREWOLF/FIREFOX/CHROME/CHROMIUM
+        browser_cache_video_scan(&browser, &dataset.video_data); //<--DONE FOR LIBREWOLF/FIREFOX/CHROME/CHROMIUM
+    }*/
+    for browser in &detected_browsers {
+        browser_cache_asset_scan(&browser, &dataset.asset_data); //TODO
     }
     println!("Done!");
 }
