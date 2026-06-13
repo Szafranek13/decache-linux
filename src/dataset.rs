@@ -17,7 +17,7 @@ pub struct DataSet {
 ///"Roblox+Video+101|-8128339497863628282,39c9cb3870db6751|0000000000000000|00:03:52.43|00:03:52.63"
 ///
 ///VIDEO TITLE|GOOGLE_VIDEO_ID,GOOGLE_VIDEO_CONTENT_ID|HASH|DUR_MIN|DUR_MAX
-
+#[derive(Debug)]
 pub struct VideoData {
     //IN video_data.txt THIS IS A REGEX SPERATED BY + (i think)
     ///Title of a video.
@@ -60,11 +60,16 @@ pub fn load_dataset(data_dir: PathBuf) -> DataSet {
             .and_then(|entry| entry.strip_suffix('"'))
             .unwrap_or(&entry);
         //split the line by "|" into a vector
-        let entry_vec: Vec<&str> = entry_sanitised.split("|").collect();
-        if entry_vec.len() != 5 {
-            panic!("Some entry has less than 5 elements!"); // panic when not enough data!!!
-        };
+        let entry_vec: Vec<&str> = entry_sanitised.split('|').collect();
+        
+        if entry_vec.len() != 5 { // panic when not enough data!!!
 
+            panic!(
+                "Expected 5 fields, got {} in line: {}",
+                entry_vec.len(),
+                entry_sanitised
+                );
+        }
         //create VideoData structure from vector
         let entry_struct = VideoData {
             title: entry_vec[0].to_string(),
@@ -74,45 +79,45 @@ pub fn load_dataset(data_dir: PathBuf) -> DataSet {
                 .collect(),
             hash: entry_vec[2]
                 .split(",")
-                .filter_map(|h| u64::from_str_radix(h, 16).ok())
+                .filter_map(|h| Some(u64::from_str_radix(h, 16).unwrap_or(0)))
                 .collect(),
             duration_min: entry_vec[3].to_string(),
             duration_max: entry_vec[4].to_string(),
         };
-
         video_data_struct_vec.push(entry_struct);
     }
-    println!(
+    
+    /*println!(
         "Loaded {} entries from {}",
         video_data_struct_vec.len(),
         video_data_path.display()
-    );
+    );*/
     let watch_page_data_path = data_dir.join("watch_page_data.txt");
     let watch_page_data = read_lines(&watch_page_data_path);
-    println!(
+    /*println!(
         "Loaded {} entries from {}",
         watch_page_data.len(),
         watch_page_data_path.display()
-    );
+    );*/
     let asset_data_path = data_dir.join("asset_data.txt");
     let asset_data = read_lines(&asset_data_path);
-    println!(
+    /*println!(
         "Loaded {} entries from {}",
         asset_data.len(),
         asset_data_path.display()
-    );
+    );*/
     let history_data_path = data_dir.join("history_data.txt");
     let history_data = read_lines(&history_data_path);
-    println!(
+    /*println!(
         "Loaded {} entries from {}",
         history_data.len(),
         history_data_path.display()
-    );
+    );*/
 
     DataSet {
         video_data: video_data_struct_vec,
-        watch_page_data: watch_page_data,
-        asset_data: asset_data,
-        history_data: history_data,
+        watch_page_data,
+        asset_data,
+        history_data,
     }
 }
