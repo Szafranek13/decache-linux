@@ -1,4 +1,7 @@
 # Decache port for Linux
+
+![Developed by a human not by AI](Developed-By-a-Human-Not-By-AI-Badge-white.svg)
+
 ## THIS SOFTWARE IS NOT YET READY TO BE USED BEWARE
 
 A rewrite of Decache by SindexMon https://github.com/SindexMon/decache/ for Linux in rust.

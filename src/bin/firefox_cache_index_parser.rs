@@ -3,9 +3,12 @@
 //!I have found no easy way to do that so i have written my own based on this ancient Python script
 //!<https://github.com/JamesHabben/FirefoxCache2/blob/master/firefox-cache2-index-parser.py>
 
-use std::{fs::File, io::{self, BufReader, Read}};
 use byteorder::{BigEndian, ReadBytesExt};
 use std::path::{Path, PathBuf};
+use std::{
+    fs::File,
+    io::{self, BufReader, Read},
+};
 
 ///Struct representing the header of `index` file
 #[derive(Debug)]
@@ -56,19 +59,24 @@ fn hex(hash: &[u8]) -> String {
 }
 
 fn get_entries_from_index(index: &str) -> io::Result<Vec<PathBuf>> {
-	let file = File::open(index).expect("No such file");
- 	let mut reader = BufReader::new(file);
-	let header = read_header(&mut reader).expect("Could not read header");
-	
-	let mut entries_vec: Vec<PathBuf> = Vec::new();
-	
-	let entries_path = PathBuf::from("/home/jakub/.cache/librewolf/bgvrjjel.default-default/cache2/entries/");
+    let file = File::open(index).expect("No such file");
+    let mut reader = BufReader::new(file);
+    let header = read_header(&mut reader).expect("Could not read header");
+
+    let mut entries_vec: Vec<PathBuf> = Vec::new();
+
+    let entries_path =
+        PathBuf::from("/home/jakub/.cache/librewolf/bgvrjjel.default-default/cache2/entries/");
     loop {
         match read_record(&mut reader) {
             Ok(record) => {
-				let filename = record.hash.iter().map(|b| format!("{:02X}", b)).collect::<String>();
-				entries_vec.push(entries_path.join(filename));
-                let size_b: u32 = record.flags;// & 0x00FF_FFFF;
+                let filename = record
+                    .hash
+                    .iter()
+                    .map(|b| format!("{:02X}", b))
+                    .collect::<String>();
+                entries_vec.push(entries_path.join(filename));
+                let size_b: u32 = record.flags; // & 0x00FF_FFFF;
                 let size_kb = record.flags & 0x00FF_FFFF;
                 println!();
                 println!("hash: {}", hex(&record.hash).to_uppercase());
@@ -81,22 +89,24 @@ fn get_entries_from_index(index: &str) -> io::Result<Vec<PathBuf>> {
                 println!("content_type: {}", record.content_type);
                 println!("flags: 0x{:08X}", record.flags);
             }
-			
-			//if EOF reached then all entries has been read
+
+            //if EOF reached then all entries has been read
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                 break;
             }
 
             Err(e) => return Err(e),
         }
-	}
+    }
     Ok(entries_vec)
 }
 
 fn main() -> io::Result<()> {
-	let entries_files = get_entries_from_index("/home/jakub/.cache/librewolf/bgvrjjel.default-default/cache2/index")?;
-	//println!("{:#?}", entries_files);
-	//let data = std::fs::read(entries_path.join(filename)).unwrap();
+    let entries_files = get_entries_from_index(
+        "/home/jakub/.cache/librewolf/bgvrjjel.default-default/cache2/index",
+    )?;
+    //println!("{:#?}", entries_files);
+    //let data = std::fs::read(entries_path.join(filename)).unwrap();
 
-	Ok(())
+    Ok(())
 }

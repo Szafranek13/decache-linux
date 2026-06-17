@@ -41,9 +41,7 @@ fn compute_phash(frame: &[u8; WIDTH * HEIGHT]) -> u64 {
             let mut sum = 0f32;
             for x in 0..WIDTH {
                 for y in 0..HEIGHT {
-                    sum += frame[y * WIDTH + x] as f32
-                        * cos_x[x][u]
-                        * cos_y[y][v];
+                    sum += frame[y * WIDTH + x] as f32 * cos_x[x][u] * cos_y[y][v];
                 }
             }
             let cu = if u == 0 {
@@ -51,13 +49,13 @@ fn compute_phash(frame: &[u8; WIDTH * HEIGHT]) -> u64 {
             } else {
                 1.0
             };
-            
+
             let cv = if v == 0 {
                 std::f32::consts::FRAC_1_SQRT_2
             } else {
                 1.0
             };
-            
+
             dct[u][v] = 0.25 * cu * cv * sum;
         }
     }

@@ -26,19 +26,18 @@
 //concentate them
 //
 
-
 mod browsette;
-use crate::browsette::{Browser, BrowserName, BrowserFamily};
+use crate::browsette::{Browser, BrowserFamily, BrowserName};
 
-mod cache2_metadata;
 mod cache2_entry_metadata;
+mod cache2_metadata;
 mod dataset;
 mod phash_generator;
 
 use dirs::home_dir;
 use ffmpeg_sidecar::command::FfmpegCommand;
 use ini::Ini;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -78,7 +77,7 @@ fn get_profile_list(browser: &Browser) -> Vec<String> {
         fs::read_to_string(profile_list_file_path).expect("Could not read file.");
 
     match browser.family {
-       BrowserFamily::Gecko => {
+        BrowserFamily::Gecko => {
             let profiles_list_ini = Ini::load_from_str(&profiles_list_file_content).unwrap();
             for (section, props) in profiles_list_ini.iter() {
                 if let Some(section_name) = section {
@@ -157,9 +156,14 @@ fn browser_history_scan(browser: &Browser, search_vector: &Vec<String>) {
                     if let rusqlite::Error::SqliteFailure(err, _) = error {
                         match err.code {
                             rusqlite::ErrorCode::DatabaseBusy => {
-                                eprintln!("The browser history database is locked, perhaps the browser is still running? Close it first. No attempt to scan.");
+                                eprintln!(
+                                    "The browser history database is locked, perhaps the browser is still running? Close it first. No attempt to scan."
+                                );
                             }
-                            _ => eprintln!("Failed to prepare query due to an error: {:#?}. No attempt to scan.", error),
+                            _ => eprintln!(
+                                "Failed to prepare query due to an error: {:#?}. No attempt to scan.",
+                                error
+                            ),
                         }
                     } else {
                         panic!(
@@ -232,16 +236,16 @@ fn browser_cache_asset_scan(browser: &Browser, asset_data: &[String]) {
                             .to_string_lossy()
                             .into_owned();
                         //println!("Checking {}", cache_entry_file_name);
-                        
-                        let entry_url = cache2_entry_metadata::get_metadata(
-                            cache_entry_path.to_str().unwrap()
-                        ).expect("Unknown problem reading entry's metadata");
+
+                        let entry_url =
+                            cache2_entry_metadata::get_metadata(cache_entry_path.to_str().unwrap())
+                                .expect("Unknown problem reading entry's metadata");
 
                         //println!("{:?}", entry_url);
 
                         for (i, asset_data_entry) in asset_data.iter().enumerate() {
                             print!("{i} /{}\r", asset_data.len());
-                        
+
                             if entry_url.contains(asset_data_entry) {
                                 println!("Found");
                             }
@@ -298,10 +302,7 @@ fn browser_cache_asset_scan(browser: &Browser, asset_data: &[String]) {
 }
 
 /// Scans browser's cache for video files
-fn browser_cache_video_scan(
-    browser: &Browser,
-    video_data: &[dataset::VideoData],
-) {
+fn browser_cache_video_scan(browser: &Browser, video_data: &[dataset::VideoData]) {
     println!(
         "Scanning {}'s cache for video_data.txt entries...",
         browser.name
@@ -364,7 +365,10 @@ fn browser_cache_video_scan(
                                     let filepath = path.to_str().unwrap();
                                     let hash_to_check = phash_generator::generate_phash(filepath);
                                     for &video_entry_hash in &video_data_entry.hash {
-                                        let result = phash_generator::hamming(video_entry_hash, hash_to_check);
+                                        let result = phash_generator::hamming(
+                                            video_entry_hash,
+                                            hash_to_check,
+                                        );
                                         difference.push(result);
                                     }
                                     match difference.iter().min().cloned() {
@@ -445,12 +449,15 @@ fn main() {
     //load dataset
     let dataset = dataset::load_dataset(BASE_DIR.join("data")); //<-- DONE
 
-    println!("video_data: {}, watch_page_data: {}, asset_data: {}, history_data: {}", dataset.video_data.len(),
-                                                                                        dataset.watch_page_data.len(),
-                                                                                        dataset.asset_data.len(),
-                                                                                        dataset.history_data.len());
-    
-  /*  
+    println!(
+        "video_data: {}, watch_page_data: {}, asset_data: {}, history_data: {}",
+        dataset.video_data.len(),
+        dataset.watch_page_data.len(),
+        dataset.asset_data.len(),
+        dataset.history_data.len()
+    );
+
+    /*
     for browser in &detected_browsers {
         //search video ids in browser history
         browser_history_scan(&browser, &dataset.history_data); //<--DONE FOR LIBREWOLF/FIREFOX/CHROME/CHROMIUM

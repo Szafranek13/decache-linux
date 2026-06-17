@@ -61,14 +61,15 @@ pub fn load_dataset(data_dir: PathBuf) -> DataSet {
             .unwrap_or(&entry);
         //split the line by "|" into a vector
         let entry_vec: Vec<&str> = entry_sanitised.split('|').collect();
-        
-        if entry_vec.len() != 5 { // panic when not enough data!!!
+
+        if entry_vec.len() != 5 {
+            // panic when not enough data!!!
 
             panic!(
                 "Expected 5 fields, got {} in line: {}",
                 entry_vec.len(),
                 entry_sanitised
-                );
+            );
         }
         //create VideoData structure from vector
         let entry_struct = VideoData {
@@ -86,7 +87,7 @@ pub fn load_dataset(data_dir: PathBuf) -> DataSet {
         };
         video_data_struct_vec.push(entry_struct);
     }
-    
+
     /*println!(
         "Loaded {} entries from {}",
         video_data_struct_vec.len(),

@@ -1,5 +1,5 @@
 use gtk::prelude::*;
-use gtk::{Application, Builder, ApplicationWindow};
+use gtk::{Application, ApplicationWindow, Builder};
 
 fn main() {
     let app = Application::builder()
@@ -12,11 +12,10 @@ fn main() {
         let window: ApplicationWindow = builder
             .object("main_window")
             .expect("Couldn't find main_window");
-        
+
         let window_clone: ApplicationWindow = window.clone();
 
         let quit_button: gtk::Button = builder.object("quit_button").unwrap();
-        
 
         quit_button.connect_clicked(move |_| {
             window_clone.close();
