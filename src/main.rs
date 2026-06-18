@@ -27,7 +27,7 @@
 //
 
 mod browsette;
-use crate::browsette::{Browser, BrowserFamily, BrowserName};
+use crate::browsette::{Browser, BrowserFamily, BrowserName, detect_browsers, get_profile_list};
 
 mod cache2_entry_metadata;
 mod cache2_metadata;
@@ -36,9 +36,7 @@ mod phash_generator;
 
 use dirs::home_dir;
 use ffmpeg_sidecar::command::FfmpegCommand;
-use ini::Ini;
 use rusqlite::{Connection, params};
-use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::{env, fs};
@@ -55,60 +53,8 @@ static BASE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     path
 });
 
-fn detect_browsers(browser_paths: &[Browser]) -> Vec<&Browser> {
-    let mut detected_browser_paths = Vec::new();
-    let home_dir = home_dir().expect("Cannot read $HOME");
-    for browser in browser_paths {
-        if home_dir.join(browser.config_path).is_dir() {
-            detected_browser_paths.push(browser);
-        }
-    }
-    detected_browser_paths
-}
-
-fn get_profile_list(browser: &Browser) -> Vec<String> {
-    let home_dir = home_dir().expect("Cannot read $HOME");
-
-    let browser_config_profile_root = home_dir.join(browser.config_path);
-    let profile_list_file_path = browser_config_profile_root.join(browser.profiles_file);
-    let mut profile_list_vector: Vec<String> = Vec::new();
-
-    let profiles_list_file_content =
-        fs::read_to_string(profile_list_file_path).expect("Could not read file.");
-
-    match browser.family {
-        BrowserFamily::Gecko => {
-            let profiles_list_ini = Ini::load_from_str(&profiles_list_file_content).unwrap();
-            for (section, props) in profiles_list_ini.iter() {
-                if let Some(section_name) = section {
-                    if section_name.starts_with("Profile") {
-                        match props.get("Path") {
-                            Some(path) => profile_list_vector.push(path.to_owned()),
-                            None => panic!("Profile section is missing Path value, skipping..."),
-                        }
-                    }
-                }
-            }
-        }
-        BrowserFamily::Chromium => {
-            let profile_list_json: Value =
-                serde_json::from_str(&profiles_list_file_content).unwrap();
-
-            if let Some(profiles) = profile_list_json["profile"]["info_cache"].as_object() {
-                for (profile_dir, _) in profiles {
-                    profile_list_vector.push(profile_dir.to_owned())
-                }
-            } else {
-                panic!("No profiles found in Local State");
-            }
-        }
-    }
-
-    profile_list_vector
-}
-
-fn browser_history_scan(browser: &Browser, search_vector: &Vec<String>) {
-    println!("Scanning {}'s history...", &browser.name);
+fn browser_history_scan(browser: &Browser, search_vector: &Vec<String>, tx: &Sender<String>,) {
+    tx.send(format!("Scanning {}...", &browser.name)).ok();
     let home_dir = home_dir().expect("No $HOME dir");
 
     let browser_config_profile_root = home_dir.join(browser.config_path);
@@ -123,7 +69,7 @@ fn browser_history_scan(browser: &Browser, search_vector: &Vec<String>) {
             .join(folder.as_path())
             .join(&profile_history);
         if history_file.is_file() {
-            println!("Scanning {}...", history_file.display());
+            tx.send(format!("Scanning {}...", history_file.display())).ok();
             let conn = Connection::open(history_file).expect("Cannot open history database");
 
             let query = match browser.family {
@@ -144,11 +90,11 @@ fn browser_history_scan(browser: &Browser, search_vector: &Vec<String>) {
                         while let Some(row) = rows.next().expect("Failed to fetch row") {
                             let url: Option<String> = row.get(0).unwrap_or_default();
                             let title: Option<String> = row.get(1).unwrap_or_default();
-                            println!(
-                                "Found: url: {}, title: {}",
-                                url.unwrap_or_default(),
-                                title.unwrap_or_default()
-                            );
+                            tx.send(format!(
+                                    "Found: url: {}, title:{}!",
+                                    url.unwrap_or_default(),
+                                    title.unwrap_or_default()
+                                    )).ok();
                         }
                     }
                 }
@@ -156,28 +102,26 @@ fn browser_history_scan(browser: &Browser, search_vector: &Vec<String>) {
                     if let rusqlite::Error::SqliteFailure(err, _) = error {
                         match err.code {
                             rusqlite::ErrorCode::DatabaseBusy => {
-                                eprintln!(
-                                    "The browser history database is locked, perhaps the browser is still running? Close it first. No attempt to scan."
-                                );
+                                tx.send("The browser history database is locked, perhaps the browser is still running? Close it first. No attempt to scan."
+                                    .into()).ok();
                             }
-                            _ => eprintln!(
-                                "Failed to prepare query due to an error: {:#?}. No attempt to scan.",
-                                error
-                            ),
+                            _ => {
+                                tx.send(format!(
+                                        "Failed to prepare query due to an error: {:#?}. No attempt to scan.",
+                                        error)).ok(); //ERROR
+                            }
                         }
                     } else {
-                        panic!(
-                            "Failed to prepare query due to an error: {:#?}. No attempt to scan.",
-                            error
-                        );
+                            tx.send(format!(
+                                    "Failed to prepare query due to an error: {:#?}. No attempt to scan.",
+                                    error)).ok(); //ERROR
                     }
                 }
             };
         } else {
-            println!(
-                "{} does not exists. No attempt to scan",
-                history_file.display()
-            )
+                tx.send(format!(
+                    "{} does not exists. No attempt to scan",
+                    history_file.display())).ok();
         }
     }
 }
@@ -206,7 +150,7 @@ fn check_if_video_stream_is_complete() {
     todo!();
 }
 
-fn browser_cache_asset_scan(browser: &Browser, asset_data: &[String]) {
+fn browser_cache_asset_scan(browser: &Browser, asset_data: &[String], tx: &Sender<String>) {
     println!(
         "Scanning {}'s cache for asset_data.txt entries...",
         browser.name
@@ -302,11 +246,10 @@ fn browser_cache_asset_scan(browser: &Browser, asset_data: &[String]) {
 }
 
 /// Scans browser's cache for video files
-fn browser_cache_video_scan(browser: &Browser, video_data: &[dataset::VideoData]) {
-    println!(
-        "Scanning {}'s cache for video_data.txt entries...",
-        browser.name
-    );
+fn browser_cache_video_scan(browser: &Browser, video_data: &[dataset::VideoData], tx: &Sender<String>) {
+        tx.send(format!(
+            "Scanning {}'s cache for video_data.txt entries...",
+            browser.name)).ok();
 
     let home_dir = home_dir().expect("Cannot read $HOME");
 
@@ -319,7 +262,8 @@ fn browser_cache_video_scan(browser: &Browser, video_data: &[dataset::VideoData]
         let folder_cache_path = &browser_cache_profile_root.join(folder).join(&profile_cache);
 
         if folder_cache_path.is_dir() {
-            println!("Scanning {:?}", folder_cache_path);
+            tx.send(format!(
+                "Scanning {:?}", folder_cache_path)).ok();
             if let Ok(cache_entries) = fs::read_dir(&folder_cache_path) {
                 for cache_entry in cache_entries {
                     let cache_entry_path = cache_entry.unwrap().path();
@@ -338,8 +282,9 @@ fn browser_cache_video_scan(browser: &Browser, video_data: &[dataset::VideoData]
                                 .unwrap()
                                 .to_string_lossy()
                                 .into_owned();
-
-                            println!("Checking {}", cache_entry_file_name);
+                            
+                            tx.send(format!(
+                                    "Checking {}", cache_entry_file_name)).ok();
 
                             //if the temporary dir is there remove it
                             //if not, create it, use it and then remove it
@@ -387,11 +332,12 @@ fn browser_cache_video_scan(browser: &Browser, video_data: &[dataset::VideoData]
                                 let difference_final = difference_pack.iter().min().unwrap();
                                 // only if difference is less than 5
                                 if *difference_final < 5 as u32 {
-                                    println!();
-                                    println!(
+                                    
+                                    tx.send(format!(
                                         "Closest difference of {:?} is {:?}",
                                         video_data_entry.title, difference_final
-                                    );
+                                    )).ok();
+
                                     let copy_destination =
                                         PathBuf::from("./Verified/{}").join(&cache_entry_path);
                                     safely_copy(&cache_entry_path, PathBuf::from(copy_destination))
@@ -407,10 +353,13 @@ fn browser_cache_video_scan(browser: &Browser, video_data: &[dataset::VideoData]
                     }
                 }
             } else {
-                println!("Cannot read folder {:?}", folder_cache_path);
+
+                tx.send(format!(
+                    "Cannot read folder {:?}", folder_cache_path)).ok();
             }
         } else {
-            println!("No cache folder found in profile {:?}", folder_cache_path)
+            tx.send(format!(
+                "No cache folder found in profile {:?}", folder_cache_path)).ok();
         }
     }
 }
@@ -439,35 +388,115 @@ fn extract_videoframes(input_file: PathBuf, output_file: PathBuf) {
         .expect("ffmpeg gave up :(");
 }
 
-fn main() {
+
+// Do it all
+fn process(tx: Sender<String>) {
+    tx.send("Starting scan...".into()).ok();
     //load browser paths
-    let browser_paths = browsette::SUPPORTED_BROWSERS;
+    let linux_browser_paths = browsette::SUPPORTED_BROWSERS;
+    
     //detect browsers installed on the pc
-    let detected_browsers = detect_browsers(browser_paths);
+    let detected_browsers = detect_browsers(linux_browser_paths);
+
     println!("{:#?}", &detected_browsers);
 
     //load dataset
     let dataset = dataset::load_dataset(BASE_DIR.join("data")); //<-- DONE
 
-    println!(
+    tx.send(format!(
         "video_data: {}, watch_page_data: {}, asset_data: {}, history_data: {}",
         dataset.video_data.len(),
         dataset.watch_page_data.len(),
         dataset.asset_data.len(),
         dataset.history_data.len()
-    );
-
-    /*
+    )).ok();
+    
     for browser in &detected_browsers {
         //search video ids in browser history
-        browser_history_scan(&browser, &dataset.history_data); //<--DONE FOR LIBREWOLF/FIREFOX/CHROME/CHROMIUM
-    }*/
-    for browser in &detected_browsers {
-        browser_cache_video_scan(&browser, &dataset.video_data); //<--DONE FOR LIBREWOLF/FIREFOX/CHROME/CHROMIUM
+        browser_history_scan(&browser, &dataset.history_data, &tx); //<--DONE FOR LIBREWOLF/FIREFOX/CHROME/CHROMIUM
     }
+    for browser in &detected_browsers {
+        browser_cache_video_scan(&browser, &dataset.video_data, &tx); //<--DONE FOR LIBREWOLF/FIREFOX/CHROME/CHROMIUM
+    }
+    
     /*
     for browser in &detected_browsers {
         browser_cache_asset_scan(&browser, &dataset.asset_data); //TODO
     }*/
-    println!("Done!");
+    tx.send("Done!".into()).ok();
+}
+
+use eframe::egui;
+use egui::Ui;
+
+use std::sync::mpsc::{self, Receiver, Sender};
+
+struct MyApp {
+    log: String,
+    rx: Receiver<String>,
+    tx: Sender<String>,
+}
+
+impl Default for MyApp {
+    fn default() -> Self {
+        let (tx, rx) = mpsc::channel();
+
+        Self {
+            log: String::new(),
+            rx,
+            tx,
+        }
+    }
+}
+
+fn main() -> eframe::Result {
+//    egui_logger::builder().init().unwrap();
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([320.0, 240.0]),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "Decache-rs debug",
+        options,
+        Box::new(|cc| Ok(Box::new(MyApp::default()))),
+    )
+
+}
+
+impl eframe::App for MyApp {
+    fn ui(&mut self, _: &mut Ui, _: &mut eframe::Frame) { }
+    fn update(
+        &mut self,
+        ctx: &egui::Context,
+        frame: &mut eframe::Frame,
+    ) {
+        while let Ok(msg) = self.rx.try_recv() {
+            self.log.push_str(&msg);
+            self.log.push('\n');
+        }
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("Decache-rs");
+
+            let mut log_text = String::from(
+                "This is a read-only log box\n\
+                 Line 2\n\
+                 Line 3",
+            );
+
+            egui::ScrollArea::vertical()
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    ui.monospace(&self.log);
+                });
+
+            if ui.button("Start").clicked() {
+                let tx = self.tx.clone();
+                std::thread::spawn(move || {
+                    process(tx);
+                });
+            }       
+
+        });
+    }
 }

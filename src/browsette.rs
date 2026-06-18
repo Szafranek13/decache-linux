@@ -1,4 +1,9 @@
 use std::fmt;
+use dirs::home_dir;
+use ini::Ini;
+use serde_json::Value;
+use std::fs;
+
 
 #[derive(Debug)]
 pub struct Browser {
@@ -37,6 +42,8 @@ pub enum BrowserFamily {
     Chromium,
 }
 
+/// Slice of structs with data about all covered browsers
+#[cfg(target_os = "linux")]
 pub static SUPPORTED_BROWSERS: &[Browser] = &[
     Browser {
         name: BrowserName::Firefox,
@@ -79,3 +86,74 @@ pub static SUPPORTED_BROWSERS: &[Browser] = &[
         cache_entries_path: "Cache/Cache_Data",
     },
 ];
+
+#[cfg(target_os = "windows")]
+pub static SUPPORTED_BROWSERS: &[Browser] = &[
+    Browser {
+        name: BrowserName::Firefox,
+        family: BrowserFamily::Gecko,
+        config_path: "AppData\\Mozilla\\Firefox",
+        profiles_file: "profiles.ini",
+        history_file: "places.sqlite",
+        cache_path: "AppData\\Local\\Mozilla\\Firefox",
+        cache_index_file: "cache2\\index",
+        cache_entries_path: "cache2\\entries",
+    },
+];
+
+pub fn detect_browsers(browser_paths: &[Browser]) -> Vec<&Browser> {
+    #[cfg(target_os = "linux")]
+    let home_dir = home_dir().expect("Cannot read $HOME");
+    #[cfg(target_os = "windows")]
+    let home_dir = home_dir().expect("Cannot read %USERPROFILE%");
+    
+    let mut detected_browser_paths = Vec::new();
+    for browser in browser_paths {
+        if home_dir.join(browser.config_path).is_dir() {
+            detected_browser_paths.push(browser);
+        }
+    }
+    detected_browser_paths
+}
+
+#[cfg(target_os = "linux")]
+pub fn get_profile_list(browser: &Browser) -> Vec<String> {
+    let home_dir = home_dir().expect("Cannot read $HOME");
+
+    let browser_config_profile_root = home_dir.join(browser.config_path);
+    let profile_list_file_path = browser_config_profile_root.join(browser.profiles_file);
+    let mut profile_list_vector: Vec<String> = Vec::new();
+
+    let profiles_list_file_content =
+        fs::read_to_string(profile_list_file_path).expect("Could not read file.");
+
+    match browser.family {
+        BrowserFamily::Gecko => {
+            let profiles_list_ini = Ini::load_from_str(&profiles_list_file_content).unwrap();
+            for (section, props) in profiles_list_ini.iter() {
+                if let Some(section_name) = section {
+                    if section_name.starts_with("Profile") {
+                        match props.get("Path") {
+                            Some(path) => profile_list_vector.push(path.to_owned()),
+                            None => panic!("Profile section is missing Path value, skipping..."),
+                        }
+                    }
+                }
+            }
+        }
+        BrowserFamily::Chromium => {
+            let profile_list_json: Value =
+                serde_json::from_str(&profiles_list_file_content).unwrap();
+
+            if let Some(profiles) = profile_list_json["profile"]["info_cache"].as_object() {
+                for (profile_dir, _) in profiles {
+                    profile_list_vector.push(profile_dir.to_owned())
+                }
+            } else {
+                panic!("No profiles found in Local State");
+            }
+        }
+    }
+
+    profile_list_vector
+}

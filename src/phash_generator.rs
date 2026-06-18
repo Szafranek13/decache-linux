@@ -88,7 +88,7 @@ pub fn generate_phash(file_path: &str) -> u64 {
     compute_phash(&frame)
 }
 
-// Calculates the difference between two given hashes
+/// Calculates the difference between two given hashes
 pub fn hamming(a: u64, b: u64) -> u32 {
     (a ^ b).count_ones()
 }
