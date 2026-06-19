@@ -13,12 +13,12 @@
 //01.06.2026 Made "hash" of VideoData structure a vector.
 //   Hashing works well, and fast
 
-// TODO Generation of hashes and comparation should be
-// in separate functions NOT in browser_cache_scan...
 // TODO Do something about the ffmpeg bottlneck maybe...
 // TODO The most important functions (or all of them) should return Result propperly instead of panicing
 // TODO Chrome/Chromium stores cache in a weird format, process it
 // TODO Original skips looking into cache entries that are from web.archive.org
+// TODO LogMessage should be a vector containing the separate messages. Currently LogMessage is a
+// really long string containing all of messages Strings. Egui can't color that.
 
 //The original script seems to copy only MP4 FLV and WEBM video files to Unveryfied
 //It also checks if a video file it found is complete by checking if it has ftyp at the beggining of file
@@ -53,8 +53,12 @@ static BASE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     path
 });
 
-fn browser_history_scan(browser: &Browser, search_vector: &Vec<String>, tx: &Sender<String>) {
-    tx.send(format!("Scanning {}...", &browser.name)).ok();
+fn browser_history_scan(browser: &Browser, search_vector: &Vec<String>, tx: &Sender<LogMessage>) {
+    tx.send(LogMessage {
+        message: format!("Scanning {}...", &browser.name),
+        level: LogLevel::Info,
+    })
+    .ok();
     let home_dir = home_dir().expect("No $HOME dir");
 
     let browser_config_profile_root = home_dir.join(browser.config_path);
@@ -69,8 +73,11 @@ fn browser_history_scan(browser: &Browser, search_vector: &Vec<String>, tx: &Sen
             .join(folder.as_path())
             .join(&profile_history);
         if history_file.is_file() {
-            tx.send(format!("Scanning {}...", history_file.display()))
-                .ok();
+            tx.send(LogMessage {
+                message: format!("Scanning {}...", history_file.display()),
+                level: LogLevel::Info,
+            })
+            .ok();
             let conn = Connection::open(history_file).expect("Cannot open history database");
 
             let query = match browser.family {
@@ -91,11 +98,14 @@ fn browser_history_scan(browser: &Browser, search_vector: &Vec<String>, tx: &Sen
                         while let Some(row) = rows.next().expect("Failed to fetch row") {
                             let url: Option<String> = row.get(0).unwrap_or_default();
                             let title: Option<String> = row.get(1).unwrap_or_default();
-                            tx.send(format!(
-                                "Found: url: {}, title:{}!",
-                                url.unwrap_or_default(),
-                                title.unwrap_or_default()
-                            ))
+                            tx.send(LogMessage {
+                                message: format!(
+                                    "Found: url: {}, title:{}!",
+                                    url.unwrap_or_default(),
+                                    title.unwrap_or_default()
+                                ),
+                                level: LogLevel::Info,
+                            })
                             .ok();
                         }
                     }
@@ -104,29 +114,48 @@ fn browser_history_scan(browser: &Browser, search_vector: &Vec<String>, tx: &Sen
                     if let rusqlite::Error::SqliteFailure(err, _) = error {
                         match err.code {
                             rusqlite::ErrorCode::DatabaseBusy => {
-                                tx.send("The browser history database is locked, perhaps the browser is still running? Close it first. No attempt to scan."
-                                    .into()).ok();
+                                tx.send(
+                                    LogMessage{
+                                        message: "The browser history database is locked, perhaps the browser is still running? Close it first. No attempt to scan."
+                                            .into(),
+                                        level: LogLevel::Error,
+                                    }
+                                ).ok();
                             }
                             _ => {
-                                tx.send(format!(
-                                        "Failed to prepare query due to an error: {:#?}. No attempt to scan.",
-                                        error)).ok(); //ERROR
+                                tx.send(
+                                    LogMessage{
+                                        message: format!(
+                                            "Failed to prepare query due to an error: {:#?}. No attempt to scan.",
+                                            error
+                                        ),
+                                        level: LogLevel::Error,
+                                    }
+                                ).ok(); //ERROR
                             }
                         }
                     } else {
-                        tx.send(format!(
-                            "Failed to prepare query due to an error: {:#?}. No attempt to scan.",
-                            error
-                        ))
+                        tx.send(
+                            LogMessage{
+                                message: format!(
+                                    "Failed to prepare query due to an error: {:#?}. No attempt to scan.",
+                                    error
+                                ),
+                                level: LogLevel::Error
+                            }
+                        )
                         .ok(); //ERROR
                     }
                 }
             };
         } else {
-            tx.send(format!(
-                "{} does not exists. No attempt to scan",
-                history_file.display()
-            ))
+            tx.send(LogMessage {
+                message: format!(
+                    "{} does not exists. No attempt to scan",
+                    history_file.display(),
+                ),
+                level: LogLevel::Error,
+            })
             .ok();
         }
     }
@@ -156,7 +185,7 @@ fn check_if_video_stream_is_complete() {
     todo!();
 }
 
-fn browser_cache_asset_scan(browser: &Browser, asset_data: &[String], tx: &Sender<String>) {
+fn browser_cache_asset_scan(browser: &Browser, asset_data: &[String], tx: &Sender<LogMessage>) {
     println!(
         "Scanning {}'s cache for asset_data.txt entries...",
         browser.name
@@ -255,12 +284,15 @@ fn browser_cache_asset_scan(browser: &Browser, asset_data: &[String], tx: &Sende
 fn browser_cache_video_scan(
     browser: &Browser,
     video_data: &[dataset::VideoData],
-    tx: &Sender<String>,
+    tx: &Sender<LogMessage>,
 ) {
-    tx.send(format!(
-        "Scanning {}'s cache for video_data.txt entries...",
-        browser.name
-    ))
+    tx.send(LogMessage {
+        message: format!(
+            "Scanning {}'s cache for video_data.txt entries...",
+            browser.name
+        ),
+        level: LogLevel::Info,
+    })
     .ok();
 
     let home_dir = home_dir().expect("Cannot read $HOME");
@@ -274,7 +306,12 @@ fn browser_cache_video_scan(
         let folder_cache_path = &browser_cache_profile_root.join(folder).join(&profile_cache);
 
         if folder_cache_path.is_dir() {
-            tx.send(format!("Scanning {:?}", folder_cache_path)).ok();
+            tx.send(LogMessage {
+                message: format!("Scanning {:?}", folder_cache_path),
+                level: LogLevel::Info,
+            })
+            .ok();
+
             if let Ok(cache_entries) = fs::read_dir(&folder_cache_path) {
                 for cache_entry in cache_entries {
                     let cache_entry_path = cache_entry.unwrap().path();
@@ -294,7 +331,11 @@ fn browser_cache_video_scan(
                                 .to_string_lossy()
                                 .into_owned();
 
-                            tx.send(format!("Checking {}", cache_entry_file_name)).ok();
+                            tx.send(LogMessage {
+                                message: format!("Checking {}", cache_entry_file_name),
+                                level: LogLevel::Info,
+                            })
+                            .ok();
 
                             //if the temporary dir is there remove it
                             //if not, create it, use it and then remove it
@@ -341,15 +382,22 @@ fn browser_cache_video_scan(
                                 //                                print!("{i} /{}\r", video_data.len());
                                 //                                io::stdout().flush().unwrap();
 
-                                tx.send(format!("{}/{}\r", i, video_data.len())).ok();
+                                tx.send(LogMessage {
+                                    message: format!("{}/{}\r", i, video_data.len()),
+                                    level: LogLevel::Info,
+                                })
+                                .ok();
 
                                 let difference_final = difference_pack.iter().min().unwrap();
                                 // only if difference is less than 5
                                 if *difference_final < 5 as u32 {
-                                    tx.send(format!(
-                                        "Closest difference of {:?} is {:?}",
-                                        video_data_entry.title, difference_final
-                                    ))
+                                    tx.send(LogMessage {
+                                        message: format!(
+                                            "Closest difference of {:?} is {:?}",
+                                            video_data_entry.title, difference_final
+                                        ),
+                                        level: LogLevel::Info,
+                                    })
                                     .ok();
 
                                     let copy_destination =
@@ -367,14 +415,17 @@ fn browser_cache_video_scan(
                     }
                 }
             } else {
-                tx.send(format!("Cannot read folder {:?}", folder_cache_path))
-                    .ok();
+                tx.send(LogMessage {
+                    message: format!("Cannot read folder {:?}", folder_cache_path),
+                    level: LogLevel::Error,
+                })
+                .ok();
             }
         } else {
-            tx.send(format!(
-                "No cache folder found in profile {:?}",
-                folder_cache_path
-            ))
+            tx.send(LogMessage {
+                message: format!("No cache folder found in profile {:?}", folder_cache_path),
+                level: LogLevel::Error,
+            })
             .ok();
         }
     }
@@ -405,31 +456,46 @@ fn extract_videoframes(input_file: PathBuf, output_file: PathBuf) {
 }
 
 // Do it all
-fn process(tx: Sender<String>) {
-    tx.send("Starting...".into()).ok();
+fn process(tx: Sender<LogMessage>) {
+    tx.send(LogMessage {
+        message: "Starting...".into(),
+        level: LogLevel::Info,
+    })
+    .ok();
     //load browser paths
     let linux_browser_paths = browsette::SUPPORTED_BROWSERS;
 
     //detect browsers installed on the pc
     let detected_browsers = detect_browsers(linux_browser_paths);
 
-    tx.send("Detected browsers:".into()).ok();
+    tx.send(LogMessage {
+        message: "Detected browsers:".into(),
+        level: LogLevel::Info,
+    })
+    .ok();
     for browser in &detected_browsers {
-        tx.send(format!("\t{} at {}", browser.name, browser.config_path))
-            .ok();
+        tx.send(LogMessage {
+            message: format!("\t{} at {}", browser.name, browser.config_path),
+            level: LogLevel::Info,
+        })
+        .ok();
     }
 
     //load dataset
     let dataset = dataset::load_dataset(BASE_DIR.join("data")); //<-- DONE
 
-    tx.send(format!(
-            "Loaded database:\n\tvideo_data: {},\n\twatch_page_data: {},\n\tasset_data: {},\n\thistory_data: {}",
-            dataset.video_data.len(),
-            dataset.watch_page_data.len(),
-            dataset.asset_data.len(),
-            dataset.history_data.len()
-    ))
-    .ok();
+    tx.send(
+        LogMessage {
+            message: format!(
+                        "Loaded database:\n\tvideo_data: {},\n\twatch_page_data: {},\n\tasset_data: {},\n\thistory_data: {}",
+                            dataset.video_data.len(),
+                            dataset.watch_page_data.len(),
+                            dataset.asset_data.len(),
+                            dataset.history_data.len()
+            ),
+            level: LogLevel::Info
+        }
+    ).ok();
 
     for browser in &detected_browsers {
         //search video ids in browser history
@@ -443,8 +509,17 @@ fn process(tx: Sender<String>) {
     for browser in &detected_browsers {
         browser_cache_asset_scan(&browser, &dataset.asset_data); //TODO
     }*/
-    tx.send("Done!".into()).ok();
+    tx.send(LogMessage {
+        message: "Done!".into(),
+        level: LogLevel::Info,
+    })
+    .ok();
 }
+
+use eframe::egui;
+use egui::Ui;
+
+use std::sync::mpsc::{self, Receiver, Sender};
 
 struct LogMessage {
     //TODO To be used
@@ -458,16 +533,11 @@ enum LogLevel {
     Error,
 }
 
-use eframe::egui;
-use egui::Ui;
-
-use std::sync::mpsc::{self, Receiver, Sender};
-
 struct MyApp {
-    log: String,
+    log: LogMessage,
     progress: f32,
-    rx: Receiver<String>,
-    tx: Sender<String>,
+    rx: Receiver<LogMessage>,
+    tx: Sender<LogMessage>,
 }
 
 impl Default for MyApp {
@@ -475,7 +545,10 @@ impl Default for MyApp {
         let (tx, rx) = mpsc::channel();
 
         Self {
-            log: "Press Start to start!\n".to_string(),
+            log: LogMessage {
+                message: "Press Start to start!\n".to_string(),
+                level: LogLevel::Info,
+            },
             progress: 0.0,
             rx,
             tx,
@@ -500,38 +573,47 @@ fn main() -> eframe::Result {
 impl eframe::App for MyApp {
     fn ui(&mut self, _: &mut Ui, _: &mut eframe::Frame) {}
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        while let Ok(msg) = self.rx.try_recv() {
-            self.log.push_str(&msg);
-            self.log.push('\n');
+        ctx.request_repaint();
+        while let Ok(output) = self.rx.try_recv() {
+            self.log.message.push_str(&output.message);
+            self.log.message.push('\n');
         }
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Decache-rs");
 
             egui::Frame::canvas(ui.style()).show(ui, |ui| {
-                ui.set_height(ui.available_height() - 50.0); //VERY WRONG THING TO DO
+                ui.set_height(ui.available_height()); //VERY WRONG THING TO DO
                 ui.set_width(ui.available_width());
                 egui::ScrollArea::vertical()
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
-                        ui.monospace(&self.log);
+                        ui.monospace(&self.log.message);
                     });
             });
+        });
 
+        egui::Panel::bottom("controls").show(ctx, |ui| {
             ui.add(egui::ProgressBar::new(self.progress).show_percentage());
 
             ui.horizontal(|ui| {
-                if ui.button("Quit").clicked() {
+                if ui
+                    .add_sized([50.0, 25.0], egui::Button::new("Quit"))
+                    .clicked()
+                {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
 
-                ui.add_space(ui.available_width() - 30.0); //WHAT A NAUGHTY BOY
-
-                if ui.button("Start").clicked() {
-                    let tx = self.tx.clone();
-                    std::thread::spawn(move || {
-                        process(tx);
-                    });
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_sized([50.0, 25.0], egui::Button::new("Start"))
+                        .clicked()
+                    {
+                        let tx = self.tx.clone();
+                        std::thread::spawn(move || {
+                            process(tx);
+                        });
+                    }
+                });
             });
         });
     }

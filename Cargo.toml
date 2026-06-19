@@ -3,6 +3,9 @@ name = "decache-rs"
 version = "0.0.1"
 edition = "2024"
 
+[profile.release]
+opt-level = 2
+
 [dependencies]
 walkdir = "2"
 dirs = "6.0.0"

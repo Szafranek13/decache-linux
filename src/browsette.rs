@@ -113,7 +113,7 @@ pub fn detect_browsers(browser_paths: &[Browser]) -> Vec<&Browser> {
     detected_browser_paths
 }
 
-#[cfg(target_os = "linux")]
+//#[cfg(target_os = "linux")]
 pub fn get_profile_list(browser: &Browser) -> Vec<String> {
     let home_dir = home_dir().expect("Cannot read $HOME");
 
