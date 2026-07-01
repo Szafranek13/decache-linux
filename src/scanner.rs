@@ -28,7 +28,7 @@ static BASE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
 
 fn browser_history_scan(browser: &Browser, search_vector: &Vec<String>, tx: &Sender<GuiMessage>) {
     tx.send(GuiMessage::Log(LogMessage {
-        message: format!("Scanning {}...", &browser.name),
+        message: format!("Scanning {}'s browser history...", &browser.name),
         level: LogLevel::Info,
     }))
     .ok();
@@ -151,13 +151,16 @@ fn check_filetype(path: impl AsRef<Path>) -> String {
     }
 }
 
-// Copying from and to (Un)Veryfied dir
+// Copying from and to (Un)Verified dir
 fn safely_copy(source: impl AsRef<Path>, destination: impl AsRef<Path>) -> std::io::Result<()> {
     let (source, destination) = (source.as_ref(), destination.as_ref());
     if !destination.is_file() {
+        if !BASE_DIR.join("Verified").is_dir(){
+            fs::create_dir_all(BASE_DIR.join("Verified"));
+        }
         fs::copy(source, destination)?;
     } else {
-        println!("{} already in {}", source.display(), destination.display());
+        //println!("{} already in {}", source.display(), destination.display());
     }
     Ok(())
 }
@@ -331,7 +334,7 @@ fn browser_cache_video_scan(
 
                         let filetype = check_filetype(&cache_entry_path);
 
-                        if ["mp4", "webm", "flv"].contains(&filetype.as_str()) {
+                        if ["mp4", "webm", "flv"].contains(&filetype.as_str()) { // Shitty solution! Chromium's cache entry (unlike Firefox's) is not just an mp4 with metadata appended!! TODO Change it to i don't fucking know what...
                             //|| infer::is_image(&buf){
                             //println!("{:?}", cache_entry_path);
                             //extract frame and gen hash
@@ -399,8 +402,8 @@ fn browser_cache_video_scan(
                                 .ok();
 
                                 let difference_final = difference_pack.iter().min().unwrap();
-                                // only if difference is less than 5
-                                if *difference_final < 5 as u32 {
+                                // only if difference is less than or equal to 5
+                                if *difference_final <= 5 as u32 {
                                     tx.send(GuiMessage::Log(LogMessage {
                                         message: format!(
                                             "Found a match! Closest difference of {:?} is {:?}!",
@@ -411,7 +414,8 @@ fn browser_cache_video_scan(
                                     .ok();
 
                                     let copy_destination =
-                                        PathBuf::from("./Verified/{}").join(&cache_entry_path);
+                                        BASE_DIR.join("Verified").join(&cache_entry_file_name);
+                                    //println!("{:#?}", copy_destination);
                                     safely_copy(&cache_entry_path, PathBuf::from(copy_destination))
                                         .expect("Couldn't!");
                                 }
@@ -488,7 +492,7 @@ pub fn process(tx: Sender<GuiMessage>) {
     .ok();
     for browser in &detected_browsers {
         tx.send(GuiMessage::Log(LogMessage {
-            message: format!("\t{} at {}", browser.name, browser.config_path),
+            message: format!("\t{} at {} & {}", browser.name, browser.config_path, browser.cache_path),
             level: LogLevel::Info,
         }))
         .ok();

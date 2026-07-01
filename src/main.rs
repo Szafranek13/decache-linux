@@ -1,8 +1,7 @@
 //No AI was used to write this program, I have alergy to ai slop.
 //Also, i learned rust like 1 year ago, so this probably can be optimised
-//
 
-// TODO Do something about the ffmpeg bottlneck maybe...
+// TODO Do something about the ffmpeg bottlneck maybe... maybe it could process multiple files in one process instead of calling ffmpeg everytime
 // TODO The most important functions (or all of them) should return Result propperly instead of panicing
 // TODO Chrome/Chromium stores cache in a weird format, process it
 // TODO Original skips looking into cache entries that are from web.archive.org
@@ -13,7 +12,7 @@
 //concentate them
 //
 
-// I wanted to release alpha much earlier but pride month was more important sorry guys :(
+// I wanted to release pre-alpha much earlier but i was bussy in pride month doing real life stuff, sorry guys!
 
 mod browsette;
 mod cache2_entry_metadata;
