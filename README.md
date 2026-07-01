@@ -17,7 +17,9 @@ It is aimed to be fully compatibile with assets of the original Decache.
 2. Copy `data` directory from the original Decache
 3. Put it in the same directory as decache-rs executable
 4. Start the program
+
 ![](screenshot.png)
+
 In pre-Alpha version Deache-rs will scan for entries from history_data.txt, video_data.txt and asset_data.txt in browsers' cache directories on your linux system (supports Firefox, LibreWolf, Chrome and Chromium, only Firefox and LibreWolf supports asset_data searching for now Chromium and Chrome gives wrong results about asset_data). All the scanning will be done in place (for now only found lost media of video_data.txt will be put into Verified folder (it will be created automaticaly when media will be found). It will display positive results (ex. "Found XYZ!") as green messages in the log view. Progress of each entry is shown on a progressbar. No found lost media will be sent to SindexMon or anywhere in this version.
 
 ### You can build it from source too:
